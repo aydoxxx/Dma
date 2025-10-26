@@ -1,0 +1,127 @@
+Add-Type -AssemblyName PresentationFramework 
+
+# XAML UI
+$Xaml = @"
+<Window xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
+        xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'
+        Title='JAVA PCI'
+        Width='1000' Height='500'
+        Background='White'
+        WindowStartupLocation='CenterScreen'>
+    <Grid Margin='20'>
+        <Grid.RowDefinitions>
+            <RowDefinition Height='Auto'/>
+            <RowDefinition Height='*'/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Orientation='Horizontal' Margin='0,0,0,20'>
+            <Image Width='35' Height='35'
+                   Source='https://cdn-icons-png.flaticon.com/512/709/709612.png'/>
+            <TextBlock Text='JAVA PCI'
+                       Foreground='Black'
+                       FontSize='26'
+                       FontWeight='Bold'
+                       VerticalAlignment='Center'
+                       Margin='15,0,0,0'/>
+        </StackPanel>
+
+        <DataGrid x:Name='dgSlots'
+                  Grid.Row='1'
+                  AutoGenerateColumns='False'
+                  Background='White'
+                  Foreground='Black'
+                  RowBackground='#F0F0F0'
+                  AlternatingRowBackground='WhiteSmoke'
+                  HeadersVisibility='Column'
+                  CanUserAddRows='False'
+                  IsReadOnly='True'
+                  FontSize='14'
+                  BorderThickness='0'
+                  GridLinesVisibility='Horizontal'
+                  CanUserReorderColumns='True'>
+            <DataGrid.Columns>
+                <DataGridTextColumn Header='Status' Binding='{Binding Status}' Width='80'/>
+                <DataGridTextColumn Header='Ger\u00E4t' Binding='{Binding Device}' Width='*'/>
+                <DataGridTextColumn Header='Hersteller' Binding='{Binding Manufacturer}' Width='120'/>
+                <DataGridTextColumn Header='Typ' Binding='{Binding Type}' Width='100'/>
+                <DataGridTextColumn Header='VendorID' Binding='{Binding VendorID}' Width='80'/>
+                <DataGridTextColumn Header='DeviceID' Binding='{Binding DeviceID}' Width='80'/>
+            </DataGrid.Columns>
+        </DataGrid>
+    </Grid>
+</Window>
+"@
+
+# XAML laden
+[xml]$xml = $Xaml
+$reader = New-Object System.Xml.XmlNodeReader $xml
+$window = [Windows.Markup.XamlReader]::Load($reader)
+$dgSlots = $window.FindName("dgSlots")
+
+# PCIe-Geräte live auslesen
+$pciDevices = Get-CimInstance Win32_PnPEntity | Where-Object { $_.DeviceID -match "^PCI\\VEN_" } | ForEach-Object {
+    $device = $_
+    $vendor = if ($device.DeviceID -match "VEN_([0-9A-Fa-f]{4})") { $matches[1] } else { "" }
+    $dev = if ($device.DeviceID -match "DEV_([0-9A-Fa-f]{4})") { $matches[1] } else { "" }
+
+    $status = if ($device.Status -eq "OK") { "Belegt" } else { "Frei" }
+
+    [PSCustomObject]@{
+        Status = $status
+        Device = $device.Name
+        Manufacturer = $device.Manufacturer
+        Type = $device.PNPClass
+        VendorID = $vendor
+        DeviceID = $dev
+    }
+}
+
+$dgSlots.ItemsSource = $pciDevices
+
+# Spalten skalierbar machen und Tooltips setzen
+foreach ($col in $dgSlots.Columns) {
+    $col.CanUserResize = $true
+    $col.CanUserReorder = $true
+    $col.HeaderStyle = New-Object System.Windows.Style([System.Windows.Controls.Primitives.DataGridColumnHeader])
+    $col.HeaderStyle.Setters.Add(
+        (New-Object System.Windows.Setter([System.Windows.Controls.ToolTipService]::ToolTipProperty, $col.Header))
+    )
+}
+
+# Zeilen einfärben
+$dgSlots.Add_LoadingRow({
+    param($sender, $e)
+    $item = $e.Row.Item
+    if ($item.Status -eq "Belegt") {
+        $e.Row.Background = [System.Windows.Media.Brushes]::LightGreen
+    } elseif ($item.Status -eq "Frei") {
+        $e.Row.Background = [System.Windows.Media.Brushes]::LightCoral
+    }
+})
+
+# Linksklick nur auf Zellen blockieren, Header bleibt verschiebbar
+$dgSlots.Add_PreviewMouseLeftButtonDown({
+    param($sender, $e)
+    $element = [System.Windows.Input.Mouse]::DirectlyOver
+    if ($element -is [System.Windows.Controls.DataGridCell]) {
+        $e.Handled = $true
+    }
+})
+
+# Rechtsklick-Info
+$dgSlots.Add_MouseRightButtonUp({
+    param($sender, $e)
+    $row = $dgSlots.SelectedItem
+    if ($row -ne $null) {
+        $info = "Status: $($row.Status)`n" +
+                "Gerät: $($row.Device)`n" +
+                "Hersteller: $($row.Manufacturer)`n" +
+                "Typ: $($row.Type)`n" +
+                "VendorID: $($row.VendorID)`n" +
+                "DeviceID: $($row.DeviceID)"
+        [System.Windows.MessageBox]::Show($info, "Slot Informationen", "OK", "Information")
+    }
+})
+
+# Fenster anzeigen
+$window.ShowDialog() | Out-Null
